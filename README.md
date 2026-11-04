@@ -1,0 +1,167 @@
+# StockMario · Gestión de Depósito SwissNet
+
+Sistema web para registrar **retiros y devoluciones** de materiales del depósito mediante un código QR único, con historial trazable, sumatorias acumuladas y control de herramientas pendientes de devolución.
+
+- **Frontend:** React + TypeScript + Vite + Tailwind CSS, responsive (prioridad: celular).
+- **Backend y base de datos:** Supabase (PostgreSQL + Auth + RLS + funciones RPC transaccionales).
+- **Publicación:** Vercel (URL estable para el QR físico).
+
+---
+
+## 1. Estructura del proyecto
+
+```
+StockMario/
+├── index.html
+├── package.json
+├── vite.config.ts / tailwind.config.js / postcss.config.js / tsconfig.json
+├── .env.example                      Variables de entorno de ejemplo
+├── supabase/
+│   └── migrations/                   Migraciones SQL versionadas (ejecutar en orden)
+│       ├── 0001_schema.sql           Tablas, triggers, vistas e índices
+│       ├── 0002_rpcs.sql             Funciones RPC transaccionales + importación
+│       └── 0003_rls.sql              Políticas Row Level Security
+└── src/
+    ├── main.tsx / App.tsx / index.css
+    ├── lib/
+    │   ├── supabase.ts               Cliente Supabase (solo anon key, nunca service_role)
+    │   ├── types.ts                  Tipos de dominio
+    │   ├── format.ts                 Fechas (America/Argentina/Buenos_Aires), cantidades
+    │   └── csv.ts                    Exportación a CSV
+    └── pages/
+        ├── MovementForm.tsx          Formulario móvil (lo que ven los técnicos)
+        ├── LoginPage.tsx             Acceso administrativo
+        └── admin/
+            ├── AdminLayout.tsx       Layout protegido + navegación
+            ├── Dashboard.tsx         Métricas del depósito
+            ├── History.tsx           Historial con filtros + export CSV
+            ├── Summaries.tsx         Sumatorias por material / técnico / pendientes
+            ├── Pending.tsx           Herramientas fuera del depósito
+            ├── Materials.tsx         CRUD de materiales + importación CSV
+            └── Technicians.tsx       CRUD de técnicos
+```
+
+---
+
+## 2. Modelo de datos
+
+| Tabla | Descripción |
+|---|---|
+| `technicians` | Técnicos con `active` (los inactivos no aparecen en el formulario). |
+| `materials` | Catálogo: `code` (único), `name`, `category`, `material_type` (`consumable`/`reusable`), `unit`, `initial_stock`, `minimum_stock`, `active`. |
+| `movements` | Historial **inmutable**: `withdrawal` o `return`, cantidad > 0, `created_at` del servidor (timestamptz), `notes`, `created_by`, `idempotency_key` (previene duplicados por doble pulsación). |
+| `movement_return_allocations` | Devolución parcial asignada a retiros originales de herramientas reutilizables. |
+| `profiles` | Usuarios de Supabase Auth con rol `admin`. |
+
+**Vistas de cálculo** (siempre derivadas del historial, nunca valores manuales):
+- `v_material_stock`: stock actual = inicial + devoluciones − retiros, con marcadores de stock bajo/fuera de stock.
+- `v_pending_withdrawals`: unidades pendientes de devolución por retiro (técnico, material, fecha).
+- `v_allocation_detail`: qué devoluciones cubren cada retiro.
+
+**Fórmula:** SALIDA NETA = TOTAL RETIRADO − TOTAL DEVUELTO.
+
+---
+
+## 3. Configuración de Supabase (paso a paso)
+
+1. Creá el proyecto en <https://supabase.com> (plan gratuito alcanza).
+2. Anotá de **Settings → API**: la URL del proyecto y la clave `anon` **pública**. La `service_role` **nunca** se pega en el frontend.
+3. Abrí **SQL Editor** y ejecutá, en orden, el contenido de cada migración:
+   1. `supabase/migrations/0001_schema.sql`
+   2. `supabase/migrations/0002_rpcs.sql`
+   3. `supabase/migrations/0003_rls.sql`
+4. Creá el primer administrador:
+   - **Authentication → Users → Add user → Create new user**, con email y contraseña, y **marcá "Auto Confirm User"**.
+   - El trigger `handle_new_user` crea automáticamente su perfil con rol `admin`.
+5. **Cerrar el registro abierto:** en **Authentication → Sign In / Providers → Email**, deshabilitá **"Allow new users to sign up"** (importante: evita que cualquier persona cree una cuenta admin). Agregá administradores nuevos siempre desde el panel de Auth.
+6. Opcional: en **Authentication → URL Configuration**, configurá la URL final de Vercel para el logout.
+
+### Variables de entorno
+
+```
+cp .env.example .env
+```
+
+```
+VITE_SUPABASE_URL=https://TU-PROYECTO.supabase.co
+VITE_SUPABASE_ANON_KEY=TU-CLAVE-ANON
+```
+
+---
+
+## 4. Desarrollo local
+
+```bash
+npm install
+npm run dev        # http://localhost:5173
+npm run build      # verificación de tipos + build de producción
+```
+
+- `/` → formulario móvil de movimientos.
+- `/admin` → panel administrativo (protegido con Supabase Auth).
+
+---
+
+## 5. Publicación en Vercel
+
+```bash
+git init && git add -A && git commit -m "StockMario v1"
+```
+
+1. Subí el repo a GitHub.
+2. En <https://vercel.com> → **Add New → Project** → importá el repo.
+3. Framework **Vite** detectado automático; en **Environment Variables** agregá `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY`.
+4. Deploy. La URL final (`https://<nombre>.vercel.app`) es **estable**: no cambia con cada actualización, por lo que el QR impreso no se vuelve a generar.
+
+Alternativa sin Git: `npx vercel` desde la carpeta.
+
+## 6. Generación del código QR
+
+Cuando la app esté publicada, generá el QR apuntando a `https://<tu-app>.vercel.app/` (sugerencia: <https://www.qr-code-generator.com> o el generador integrado del celular). Imprimilo y colocá el código QR físicamente en el depósito. Recomendación: resolución ≥ 300 dpi y tamaño mínimo 10×10 cm.
+
+## 7. Importación del inventario existente
+
+1. Descargá la plantilla: **Admin → Materiales → Descargar plantilla CSV**.
+2. Completá tu inventario actual en las columnas: `codigo, nombre, categoria, tipo, unidad, stock, minimo`.
+   - `tipo`: `consumable` / `reusable` (también acepta `consumible` / `herramienta`).
+   - `stock`: stock físico actual al momento de importar (se carga como stock inicial).
+3. **Admin → Materiales → Importar inventario (CSV)**. Se importa por `codigo` (actualiza existentes sin pisar datos calculados). El stock inicial solo se actualiza si el material aún no registra movimientos.
+
+## 8. Manual de uso para técnicos
+
+1. Escaneá el código QR del depósito con la cámara del celular.
+2. Seleccioná tu nombre en la lista.
+3. Elegí **Retiro** o **Devolución**.
+4. Buscá el material por nombre, código o categoría, y seleccionalo (verás el stock disponible).
+5. Ingresá la cantidad y, si querés, una observación. La fecha y hora se registran automáticamente del servidor; no podés modificarlas.
+6. Tocá **Confirmar movimiento**. Verás la confirmación y el formulario queda listo para otro registro.
+
+Reglas para reutilizables (herramientas, equipos):
+- Al devolver, la app muestra tus retiros pendientes. Por defecto la devolución se asigna automáticamente al retiro más antiguo; podés activar "Asignar manualmente" para elegir a cuál retiro corresponde.
+- No se aceptan devoluciones mayores a lo que tenés pendiente.
+
+## 9. Manual administrativo
+
+- **Dashboard:** totales de materiales y movimientos, retiros, devoluciones, stock bajo, sin stock, unidades pendientes de devolución, últimos movimientos.
+- **Historial:** tabla completa con filtros por técnico, material, tipo y rango de fechas, paginada y exportable a CSV (ábrelo en Excel con separador `;`).
+- **Resumen de movimientos:** sumatorias por material (retirado / devuelto / salida neta con historial individual expandible), por técnico, y pendientes por técnico, con filtro de período, categoría y tipo.
+- **Pendientes:** herramientas fuera del depósito, ordenadas por antigüedad.
+- **Materiales:** crear, editar, desactivar e importar; el stock se recalcula siempre desde el historial.
+- **Técnicos:** alta, edición y desactivación (los inactivos no aparecen en el formulario y conservan su historial).
+
+### Recuperación del stock
+
+El stock de cualquier material puede reconstruirse como `initial_stock + Σ devoluciones − Σ retiros`; los datos fuente son el historial de `movements`, que nunca se edita ni borra (RLS lo impide).
+
+### Mantenimiento
+
+- Copia de seguridad: Supabase permite **PITR/backups** según plan; con plan Free podés exportar `movements`, `materials` y `technicians` desde el editor SQL o **Database → Backups**.
+- Rotación de claves: solo la clave `anon` vive en el frontend; si se reemplaza, actualizar las variables en Vercel y volver a desplegar.
+
+## 10. Privacidad y seguridad implementadas
+
+- Las operaciones críticas (retiro/devolución) son funciones RPC de PostgreSQL con `security definer`: validan técnico activo, material activo, cantidad positiva, stock disponible y pendientes de devolución dentro de una **misma transacción**; cualquier error revierte todo.
+- Row Level Security en todas las tablas: el rol `anon` solo puede leer el catálogo y ejecutar las RPC; el historial completo es visible **solamente** para administradores autenticados; **no hay** políticas de UPDATE/DELETE para movimientos (historial inmutable).
+- Bloqueo por fila (`FOR UPDATE` sobre el material) para prevenir carreras de stock simultáneo.
+- Idempotencia por `idempotency_key` única: una doble pulsación no crea dos movimientos.
+- Extensión futura habilitada: la estructura permite agregar PIN por técnico o autenticación de técnicos sin cambios de esquema mayor (la selección de nombre hoy es identificación declarada, no autenticación).

@@ -1,4 +1,4 @@
-const TZ = "America/Argentina/Buenos_Aries";
+const TZ = "America/Argentina/Buenos_Aires";
 
 const dateFmt = new Intl.DateTimeFormat("es-AR", {
   timeZone: TZ,

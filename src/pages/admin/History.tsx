@@ -3,12 +3,14 @@ import { supabase } from "../../lib/supabase";
 import type { Movement, Technician, Material } from "../../lib/types";
 import { formatDateTime, formatQty, errorMessage } from "../../lib/format";
 import { historyToCsv, downloadCsv } from "../../lib/csv";
+import PhotoPreview from "./PhotoPreview";
 
 const PAGE_SIZE = 50;
 
 export default function History() {
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [materials, setMaterials] = useState<Material[]>([]);
+  const [photoVer, setPhotoVer] = useState<{ movement: Movement } | null>(null);
 
   const [techFilter, setTechFilter] = useState("");
   const [matFilter, setMatFilter] = useState("");
@@ -42,7 +44,7 @@ export default function History() {
       try {
         let query = supabase
           .from("movements")
-          .select("id, technician_id, material_id, movement_type, quantity, notes, created_by, created_at, idempotency_key", {
+          .select("id, technician_id, material_id, movement_type, quantity, notes, created_by, created_at, idempotency_key, photo_path", {
             count: "exact",
           })
           .order("created_at", { ascending: false })
@@ -129,14 +131,15 @@ export default function History() {
               <th className="th">Material</th>
               <th className="th text-right">Cantidad</th>
               <th className="th">Movimiento</th>
+              <th className="th">Foto</th>
               <th className="th">Observaciones</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {loading ? (
-              <tr><td className="td" colSpan={7}>Cargando…</td></tr>
+              <tr><td className="td" colSpan={8}>Cargando…</td></tr>
             ) : movements.length === 0 ? (
-              <tr><td className="td" colSpan={7}>No hay movimientos con estos filtros.</td></tr>
+              <tr><td className="td" colSpan={8}>No hay movimientos con estos filtros.</td></tr>
             ) : (
               movements.map((mv) => {
                 const m = matMap.get(mv.material_id);
@@ -156,6 +159,15 @@ export default function History() {
                       <span className={`badge ${mv.movement_type === "withdrawal" ? "bg-brand-100 text-brand-700" : "bg-green-100 text-green-700"}`}>
                         {mv.movement_type === "withdrawal" ? "Retiro" : "Devolución"}
                       </span>
+                    </td>
+                    <td className="td">
+                      {mv.photo_path ? (
+                        <button onClick={() => setPhotoVer({ movement: mv })} className="text-violet-600 underline hover:text-violet-800" title={mv.photo_path}>
+                          📷 Ver
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-300">—</span>
+                      )}
                     </td>
                     <td className="td max-w-40 truncate" title={mv.notes ?? ""}>
                       {mv.notes ?? "-"}
@@ -180,6 +192,10 @@ export default function History() {
           </div>
         )}
       </div>
+
+      {photoVer && (
+        <PhotoPreview movement={photoVer.movement} techName={techMap.get(photoVer.movement.technician_id) ?? "-"} matName={matMap.get(photoVer.movement.material_id)?.name ?? "-"} onClose={() => setPhotoVer(null)} />
+      )}
     </div>
   );
 }

@@ -27,7 +27,8 @@ StockMario/
     │   ├── supabase.ts               Cliente Supabase (solo anon key, nunca service_role)
     │   ├── types.ts                  Tipos de dominio
     │   ├── format.ts                 Fechas (America/Argentina/Buenos_Aires), cantidades
-    │   └── csv.ts                    Exportación a CSV
+    │   ├── csv.ts                    Exportación a CSV
+    │   └── image.ts                  Compresión de fotos en navegador (WebP/JPEG + EXIF)
     └── pages/
         ├── MovementForm.tsx          Formulario móvil (lo que ven los técnicos)
         ├── LoginPage.tsx             Acceso administrativo
@@ -38,7 +39,8 @@ StockMario/
             ├── Summaries.tsx         Sumatorias por material / técnico / pendientes
             ├── Pending.tsx           Herramientas fuera del depósito
             ├── Materials.tsx         CRUD de materiales + importación CSV
-            └── Technicians.tsx       CRUD de técnicos
+            ├── Technicians.tsx       CRUD de técnicos
+            └── PhotoPreview.tsx      Vista previa firmada de fotos de retiros
 ```
 
 ---
@@ -165,3 +167,56 @@ El stock de cualquier material puede reconstruirse como `initial_stock + Σ devo
 - Bloqueo por fila (`FOR UPDATE` sobre el material) para prevenir carreras de stock simultáneo.
 - Idempotencia por `idempotency_key` única: una doble pulsación no crea dos movimientos.
 - Extensión futura habilitada: la estructura permite agregar PIN por técnico o autenticación de técnicos sin cambios de esquema mayor (la selección de nombre hoy es identificación declarada, no autenticación).
+
+---
+
+## 11. Fotografía obligatoria en los retiros (v1.1)
+
+Cada **RETIRO** requiere una fotografía del material, herramienta o equipo. Las **devoluciones no piden foto** y mantienen su comportamiento original.
+
+### Cambios en Supabase (aplicar en este orden: 2 SQL + 1 ajuste de configuración)
+
+1. **SQL:** ejecutar en el SQL Editor `supabase/migrations/0004_movement_photos.sql`. Hace:
+   - `alter table movements add column photo_path text` (nullable → compatible con los registros anteriores).
+   - Reemplaza la RPC `create_withdrawal` con un parámetro opcional `p_photo_path`; dentro de la **misma transacción** valida que la fotografía ya esté subida en el bucket (`storage.objects`) y que la ruta respete el patrón `YYYY/MM/UUID.webp|jpg`. Si la foto falta o la suba falló, el retiro **no se registra** (PHOTO_REQUIRED / PHOTO_MISSING).
+   - Crea el bucket privado `movement-photos` (límite 5 MB por archivo).
+   - Políticas de Storage:
+     - Administradores autenticados: acceso completo al bucket (lectura vía **URLs firmadas**).
+     - Rol `anon` (el QR público): solo **INSERT** y **DELETE** de archivos cuya ruta coincida estrictamente con `^\d{4}/\d{2}/UUID\.(webp|jpe?g)$` y ≤ 5 MB. No hay política de lectura para `anon`: el bucket es privado.
+2. **Sin Edge Function requerida:** la restricción se logra con políticas de Storage por patrón de ruta (si alguien con la anon key intentara subir otro archivo, Storage lo rechaza). Endurecimiento opcional futuro: Edge Function `upload-movement-photo` con `service_role` del lado del servidor para quien requiera control adicional.
+
+### Flujo del formulario (público)
+
+1. Botones **"📷 Tomar foto"** (`capture="environment"`, abre la cámara en Chrome/Opera/Safari) y **"De la galería"** (sin `capture`, el navegador decide).
+2. Al elegir imagen se comprime **en el navegador**: corrección de orientación EXIF, lado máximo 1280 px sin deformar, WebP calidad 0,75 (fallback JPEG); objetivo 100–300 KB; nunca se sube el original (límite 15 MB, validación de MIME y decodificación).
+3. Vista previa con "Repetir foto" / "Eliminar".
+4. Al confirmar: `upload → create_withdrawal(p_photo_path)`. Si el registro falla después de subir, se **borra el archivo** (compensación, política anon DELETE) y no queda retiro sin foto ni archivo huérfano por reintento.
+5. Estados visibles: esperando foto / foto seleccionada / comprimiendo / subiendo / registrando / registrado / error. El botón queda deshabilitado durante el procesamiento (sin duplicaciones, además del `idempotency_key`).
+
+### Historial administrativo
+
+- Columna **Foto** con indicador `📷 Ver` solo en movimientos que tienen foto; los antiguos muestran "—" y siguen iguales.
+- La vista previa (`PhotoPreview.tsx`) genera la **URL firmada bajo demanda** al abrir (no descarga todas las imágenes del listado), con "Abrir en tamaño completo".
+
+### Pruebas recomendadas antes de desplegar
+
+1. Chrome Android / Opera Android: retiro con cámara y desde galería; iPhone (Safari): retiro con cámara.
+2. Imagen grande (> 5 MB que comprime a < 300 KB), vertical y horizontal (verificar orientación EXIF correcta).
+3. Intentar confirmar retiro **sin foto** → botón bloqueado.
+4. Simular fallo de suba (ej: modo avión justo tras confirmar) → mensaje de error, **sin** movimiento registrado y **sin** archivo en el bucket.
+5. Consultar la foto en Admin → Historial y verificar que los movimientos anteriores y las devoluciones siguen igual.
+
+### Despliegue de la actualización (Vercel)
+
+1. Aplicar la migración 0004 en Supabase (punteada arriba).
+2. Commit y push del código (o `npx vercel --prod`): la URL **no cambia**, el QR impreso sigue válido.
+
+---
+
+## 12. Privacidad y seguridad implementadas (resumen v1)
+
+- Las operaciones críticas (retiro/devolución) son funciones RPC de PostgreSQL con `security definer`: validan técnico activo, material activo, cantidad positiva, stock disponible y pendientes de devolución dentro de una **misma transacción**; cualquier error revierte todo.
+- Row Level Security en todas las tablas: el rol `anon` solo puede leer el catálogo y ejecutar las RPC; el historial completo es visible **solamente** para administradores autenticados; **no hay** políticas de UPDATE/DELETE para movimientos (historial inmutable).
+- Bloqueo por fila (`FOR UPDATE` sobre el material) para prevenir carreras de stock simultáneo.
+- Idempotencia por `idempotency_key` única: una doble pulsación no crea dos movimientos.
+- La clave `service_role` nunca se usa ni se expone en el frontend.

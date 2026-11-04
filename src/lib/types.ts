@@ -52,6 +52,7 @@ export interface Movement {
   created_by: string | null;
   created_at: string;
   idempotency_key: string | null;
+  photo_path: string | null;
 }
 
 export interface PendingWithdrawal {

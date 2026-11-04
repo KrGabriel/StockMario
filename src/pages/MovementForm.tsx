@@ -7,9 +7,17 @@ import {
   formatDateTime,
   errorMessage,
   randomIdempotencyKey,
+  yearMonthInTz,
 } from "../lib/format";
+import {
+  processImage,
+  validateOriginalImage,
+  type ProcessedImage,
+} from "../lib/image";
 
 type Phase = "form" | "submitting" | "success";
+type PhotoState = "none" | "compressing" | "ready";
+type SubmitStep = "uploading-photo" | "registering";
 
 export default function MovementForm() {
   const [technicians, setTechnicians] = useState<Technician[]>([]);
@@ -34,6 +42,14 @@ export default function MovementForm() {
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
   const keyRef = useRef<string>("");
+
+  // Fotografía del retiro (solo retiros; devoluciones sin cambios)
+  const [photo, setPhoto] = useState<ProcessedImage | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string>("");
+  const [photoState, setPhotoState] = useState<PhotoState>("none");
+  const [photoError, setPhotoError] = useState("");
+  const [submitStep, setSubmitStep] = useState<SubmitStep>("uploading-photo");
+  const photoInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     document.title = "Registro de movimientos · Depósito SwissNet";
@@ -99,6 +115,56 @@ export default function MovementForm() {
     }
   }
 
+  // Si cambia el tipo de movimiento, la foto se limpia (es solo para retiros)
+  useEffect(() => {
+    discardPhoto();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [movementType]);
+
+  async function handlePhotoFile(file: File | undefined) {
+    if (!file) return;
+    setPhotoError("");
+    const invalid = validateOriginalImage(file);
+    if (invalid) {
+      setPhotoError(invalid);
+      return;
+    }
+    setPhotoState("compressing");
+    try {
+      const processed = await processImage(file);
+      if (photoPreview) URL.revokeObjectURL(photoPreview);
+      setPhoto(processed);
+      setPhotoPreview(URL.createObjectURL(processed.blob));
+      setPhotoState("ready");
+    } catch (e) {
+      if (photoPreview) URL.revokeObjectURL(photoPreview);
+      setPhoto(null);
+      setPhotoPreview("");
+      setPhotoState("none");
+      setPhotoError(errorMessage(e));
+    }
+  }
+
+  function discardPhoto() {
+    if (photoPreview) URL.revokeObjectURL(photoPreview);
+    setPhoto(null);
+    setPhotoPreview("");
+    setPhotoState("none");
+    setPhotoError("");
+    if (photoInputRef.current) photoInputRef.current.value = "";
+  }
+
+  function openCameraOrGallery(capture: boolean) {
+    const input = photoInputRef.current;
+    if (!input) return;
+    if (capture) {
+      input.setAttribute("capture", "environment");
+    } else {
+      input.removeAttribute("capture");
+    }
+    input.click();
+  }
+
   function selectMaterial(m: MaterialStock) {
     setSelectedMaterial(m);
     setMaterialQuery(m.name);
@@ -118,6 +184,7 @@ export default function MovementForm() {
     if (full) setTechnicianId("");
     setMovementType("withdrawal");
     clearMaterial();
+    discardPhoto();
     setNotes("");
     setManualAlloc(false);
     setError("");
@@ -139,6 +206,8 @@ export default function MovementForm() {
     if (!technicianId) return "Seleccioná el técnico responsable.";
     if (!selectedMaterial) return "Buscá y seleccioná un material.";
     if (!qtyNum || qtyNum <= 0) return "Ingresá una cantidad mayor que cero.";
+    if (movementType === "withdrawal" && photoState !== "ready")
+      return "Tomá la fotografía del material antes de confirmar el retiro.";
     if (movementType === "withdrawal" && qtyNum > (selectedMaterial.current_stock ?? 0))
       return `Stock insuficiente: hay ${formatQty(selectedMaterial.current_stock)} ${selectedMaterial.unit}.`;
     if (movementType === "return" && selectedMaterial.material_type === "reusable") {
@@ -169,16 +238,19 @@ export default function MovementForm() {
     allocSum,
     pending,
     allocQty,
-    manualAlloc,
+      manualAlloc,
+      photoState,
   ]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (validationError || phase === "submitting") return;
+    if (validationError || phase === "submitting" || photoState === "compressing") return;
 
     keyRef.current = randomIdempotencyKey();
     setPhase("submitting");
     setError("");
+
+    let uploadedPath: string | null = null;
 
     try {
       const isWithdrawal = movementType === "withdrawal";
@@ -190,6 +262,7 @@ export default function MovementForm() {
         p_notes: notes.trim() ? notes.trim() : null,
         p_idempotency_key: keyRef.current,
       };
+
       if (
         !isWithdrawal &&
         selectedMaterial!.material_type === "reusable" &&
@@ -198,8 +271,31 @@ export default function MovementForm() {
         args.p_allocations = allocations as AllocationInput[];
       }
 
-      const { error: rpcError } = await supabase.rpc(rpcName, args);
-      if (rpcError) throw rpcError;
+      if (isWithdrawal && photo) {
+        // 1. Subir la fotografía comprimida a Storage; su existencia
+        //    se valida dentro de la transacción del retiro.
+        const { year, month } = yearMonthInTz();
+        const photoId = randomIdempotencyKey();
+        const path = `${year}/${month}/${photoId}.${photo.ext}`;
+        setSubmitStep("uploading-photo");
+        const { error: uploadError } = await supabase.storage
+          .from("movement-photos")
+          .upload(path, photo.blob, { contentType: photo.mime });
+        if (uploadError) throw uploadError;
+        uploadedPath = path;
+        args.p_photo_path = path;
+
+        // 2. Registrar el movimiento con la ruta de la foto
+        setSubmitStep("registering");
+        const { error: rpcError } = await supabase.rpc(rpcName, args);
+        if (rpcError) throw rpcError;
+      } else {
+        const { error: rpcError } = await supabase.rpc(rpcName, args);
+        if (rpcError) throw rpcError;
+      }
+
+      if (photoPreview) URL.revokeObjectURL(photoPreview);
+      setPhotoPreview("");
 
       setSuccessMsg(
         isWithdrawal
@@ -208,6 +304,15 @@ export default function MovementForm() {
       );
       setPhase("success");
     } catch (e) {
+      // Compensación: si la foto llegó a subirse pero el movimiento no se
+      // registró, se borra el archivo para no dejar huérfanos.
+      if (uploadedPath) {
+        try {
+          await supabase.storage.from("movement-photos").remove([uploadedPath]);
+        } catch {
+          // best-effort: el archivo quedará sin referencia
+        }
+      }
       setError(errorMessage(e));
       setPhase("form");
     }
@@ -423,6 +528,67 @@ export default function MovementForm() {
             />
           </div>
 
+          {movementType === "withdrawal" && (
+            <div className="rounded-xl border border-brand-200 bg-brand-50 p-3">
+              <p className="text-sm font-bold text-brand-800">
+                Fotografía del material retirado <span className="text-red-600">*</span>
+              </p>
+              <p className="mt-0.5 text-xs text-brand-700">
+                Tomá una foto del material o herramienta que retirás. Es obligatoria.
+              </p>
+
+              {photoState === "compressing" && (
+                <p className="mt-3 flex items-center gap-2 text-sm font-medium text-brand-700">
+                  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-brand-300 border-t-brand-700"></span>
+                  Comprimiendo imagen…
+                </p>
+              )}
+
+              {photoError && (
+                <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {photoError}
+                </p>
+              )}
+
+              {photoState === "ready" && photoPreview && (
+                <div className="mt-3 space-y-2">
+                  <img
+                    src={photoPreview}
+                    alt="Vista previa de la fotografía del material"
+                    className="mx-auto max-h-56 w-auto rounded-lg border border-brand-200 shadow-sm"
+                  />
+                  <p className="text-center text-xs text-brand-700">
+                    Fotografía seleccionada ({(photo!.bytes / 1024).toFixed(0)} KB · {photo!.width}×
+                    {photo!.height}px)
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button type="button" onClick={() => openCameraOrGallery(true)} className="btn-secondary">
+                      Repetir foto
+                    </button>
+                    <button type="button" onClick={discardPhoto} className="btn-secondary">
+                      Eliminar
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {photoState !== "ready" && photoState !== "compressing" && (
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => openCameraOrGallery(true)}
+                    className="rounded-xl bg-brand-600 px-4 py-3 text-sm font-bold text-white transition active:scale-[0.98] hover:bg-brand-700"
+                  >
+                    📷 Tomar foto
+                  </button>
+                  <button type="button" onClick={() => openCameraOrGallery(false)} className="btn-secondary">
+                    De la galería
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           {movementType === "return" &&
             selectedMaterial?.material_type === "reusable" &&
             pending.length > 0 && (
@@ -488,8 +654,30 @@ export default function MovementForm() {
           </p>
         )}
 
-        <button type="submit" className="btn-primary" disabled={!!validationError || phase === "submitting"}>
-          {phase === "submitting" ? "Registrando…" : "Confirmar movimiento"}
+        <input
+          ref={photoInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => handlePhotoFile(e.target.files?.[0])}
+        />
+
+        <button
+          type="submit"
+          className="btn-primary"
+          disabled={
+            !!validationError ||
+            phase === "submitting" ||
+            photoState === "compressing"
+          }
+        >
+          {photoState === "compressing"
+            ? "Comprimiendo imagen…"
+            : phase === "submitting"
+              ? submitStep === "uploading-photo"
+                ? "Subiendo fotografía…"
+                : "Registrando movimiento…"
+              : "Confirmar movimiento"}
         </button>
       </form>
     </main>

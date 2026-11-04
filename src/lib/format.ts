@@ -52,6 +52,19 @@ export function relativeTime(iso: string): string {
   return `hace ${minutes} min`;
 }
 
+const yearMonthFmt = new Intl.DateTimeFormat("en-GB", {
+  timeZone: TZ,
+  year: "numeric",
+  month: "2-digit",
+});
+
+/** Año y mes actual en la zona horaria del depósito (ej: 2026/11) */
+export function yearMonthInTz(): { year: string; month: string } {
+  const parts = yearMonthFmt.formatToParts(new Date());
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "01";
+  return { year: get("year"), month: get("month") };
+}
+
 export function randomIdempotencyKey(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();

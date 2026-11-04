@@ -14,6 +14,7 @@ import {
   validateOriginalImage,
   type ProcessedImage,
 } from "../lib/image";
+import CameraCapture from "../components/CameraCapture";
 
 type Phase = "form" | "submitting" | "success";
 type PhotoState = "none" | "compressing" | "ready";
@@ -49,7 +50,39 @@ export default function MovementForm() {
   const [photoState, setPhotoState] = useState<PhotoState>("none");
   const [photoError, setPhotoError] = useState("");
   const [submitStep, setSubmitStep] = useState<SubmitStep>("uploading-photo");
-  const photoInputRef = useRef<HTMLInputElement>(null);
+
+  // La cámara pasa la foto capturada en el momento (sin galería ni archivos)
+  async function handlePhotoFile(file: File | undefined) {
+    if (!file) return;
+    setPhotoError("");
+    const invalid = validateOriginalImage(file);
+    if (invalid) {
+      setPhotoError(invalid);
+      return;
+    }
+    setPhotoState("compressing");
+    try {
+      const processed = await processImage(file);
+      if (photoPreview) URL.revokeObjectURL(photoPreview);
+      setPhoto(processed);
+      setPhotoPreview(URL.createObjectURL(processed.blob));
+      setPhotoState("ready");
+    } catch (e) {
+      if (photoPreview) URL.revokeObjectURL(photoPreview);
+      setPhoto(null);
+      setPhotoPreview("");
+      setPhotoState("none");
+      setPhotoError(errorMessage(e));
+    }
+  }
+
+  function discardPhoto() {
+    if (photoPreview) URL.revokeObjectURL(photoPreview);
+    setPhoto(null);
+    setPhotoPreview("");
+    setPhotoState("none");
+    setPhotoError("");
+  }
 
   useEffect(() => {
     document.title = "Registro de movimientos · Depósito SwissNet";
@@ -120,50 +153,6 @@ export default function MovementForm() {
     discardPhoto();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [movementType]);
-
-  async function handlePhotoFile(file: File | undefined) {
-    if (!file) return;
-    setPhotoError("");
-    const invalid = validateOriginalImage(file);
-    if (invalid) {
-      setPhotoError(invalid);
-      return;
-    }
-    setPhotoState("compressing");
-    try {
-      const processed = await processImage(file);
-      if (photoPreview) URL.revokeObjectURL(photoPreview);
-      setPhoto(processed);
-      setPhotoPreview(URL.createObjectURL(processed.blob));
-      setPhotoState("ready");
-    } catch (e) {
-      if (photoPreview) URL.revokeObjectURL(photoPreview);
-      setPhoto(null);
-      setPhotoPreview("");
-      setPhotoState("none");
-      setPhotoError(errorMessage(e));
-    }
-  }
-
-  function discardPhoto() {
-    if (photoPreview) URL.revokeObjectURL(photoPreview);
-    setPhoto(null);
-    setPhotoPreview("");
-    setPhotoState("none");
-    setPhotoError("");
-    if (photoInputRef.current) photoInputRef.current.value = "";
-  }
-
-  function openCameraOrGallery(capture: boolean) {
-    const input = photoInputRef.current;
-    if (!input) return;
-    if (capture) {
-      input.setAttribute("capture", "environment");
-    } else {
-      input.removeAttribute("capture");
-    }
-    input.click();
-  }
 
   function selectMaterial(m: MaterialStock) {
     setSelectedMaterial(m);
@@ -254,7 +243,7 @@ export default function MovementForm() {
 
     try {
       const isWithdrawal = movementType === "withdrawal";
-      const rpcName = isWithdrawal ? "create_withdrawal" : "create_return";
+      const rpcName = isWithdrawal ? "create_withdrawal" : "create_return_request";
       const args: Record<string, unknown> = {
         p_technician_id: technicianId,
         p_material_id: selectedMaterial!.id,
@@ -300,7 +289,7 @@ export default function MovementForm() {
       setSuccessMsg(
         isWithdrawal
           ? `Retiro registrado: ${formatQty(qtyNum)} ${selectedMaterial!.unit} de ${selectedMaterial!.name}`
-          : `Devolución registrada: ${formatQty(qtyNum)} ${selectedMaterial!.unit} de ${selectedMaterial!.name}`,
+          : `Devolución enviada correctamente. Está pendiente de aprobación por el administrador.`,
       );
       setPhase("success");
     } catch (e) {
@@ -333,8 +322,15 @@ export default function MovementForm() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
             </svg>
           </div>
-          <h1 className="text-xl font-bold text-slate-900">Movimiento registrado</h1>
+          <h1 className="text-xl font-bold text-slate-900">
+            {movementType === "withdrawal" ? "Movimiento registrado" : "Solicitud de devolución enviada"}
+          </h1>
           <p className="mt-2 text-slate-600">{successMsg}</p>
+          {movementType !== "withdrawal" && (
+            <p className="mt-1 text-sm text-slate-500">
+              El stock se actualizará cuando el administrador la apruebe.
+            </p>
+          )}
           <button onClick={() => resetForm(false)} className="btn-primary mt-6">
             Registrar otro movimiento
           </button>
@@ -534,15 +530,9 @@ export default function MovementForm() {
                 Fotografía del material retirado <span className="text-red-600">*</span>
               </p>
               <p className="mt-0.5 text-xs text-brand-700">
-                Tomá una foto del material o herramienta que retirás. Es obligatoria.
+                Debe tomarse una foto del material o herramienta en este momento, con la cámara del
+                teléfono. No se aceptan imágenes guardadas.
               </p>
-
-              {photoState === "compressing" && (
-                <p className="mt-3 flex items-center gap-2 text-sm font-medium text-brand-700">
-                  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-brand-300 border-t-brand-700"></span>
-                  Comprimiendo imagen…
-                </p>
-              )}
 
               {photoError && (
                 <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -550,7 +540,7 @@ export default function MovementForm() {
                 </p>
               )}
 
-              {photoState === "ready" && photoPreview && (
+              {photoState === "ready" && photoPreview ? (
                 <div className="mt-3 space-y-2">
                   <img
                     src={photoPreview}
@@ -558,33 +548,27 @@ export default function MovementForm() {
                     className="mx-auto max-h-56 w-auto rounded-lg border border-brand-200 shadow-sm"
                   />
                   <p className="text-center text-xs text-brand-700">
-                    Fotografía seleccionada ({(photo!.bytes / 1024).toFixed(0)} KB · {photo!.width}×
+                    Fotografía tomada ({(photo!.bytes / 1024).toFixed(0)} KB · {photo!.width}×
                     {photo!.height}px)
                   </p>
                   <div className="grid grid-cols-2 gap-2">
-                    <button type="button" onClick={() => openCameraOrGallery(true)} className="btn-secondary">
-                      Repetir foto
+                    <button type="button" onClick={discardPhoto} className="btn-secondary">
+                      Volver a tomar
                     </button>
                     <button type="button" onClick={discardPhoto} className="btn-secondary">
-                      Eliminar
+                      Descartar
                     </button>
                   </div>
                 </div>
-              )}
-
-              {photoState !== "ready" && photoState !== "compressing" && (
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => openCameraOrGallery(true)}
-                    className="rounded-xl bg-brand-600 px-4 py-3 text-sm font-bold text-white transition active:scale-[0.98] hover:bg-brand-700"
-                  >
-                    📷 Tomar foto
-                  </button>
-                  <button type="button" onClick={() => openCameraOrGallery(false)} className="btn-secondary">
-                    De la galería
-                  </button>
+              ) : photoState !== "compressing" ? (
+                <div className="mt-3">
+                  <CameraCapture onCapture={handlePhotoFile} processing={false} />
                 </div>
+              ) : (
+                <p className="mt-3 flex items-center gap-2 text-sm font-medium text-brand-700">
+                  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-brand-300 border-t-brand-700"></span>
+                  Comprimiendo imagen…
+                </p>
               )}
             </div>
           )}
@@ -654,13 +638,12 @@ export default function MovementForm() {
           </p>
         )}
 
-        <input
-          ref={photoInputRef}
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={(e) => handlePhotoFile(e.target.files?.[0])}
-        />
+        {movementType === "return" && !validationError && (
+          <p className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm text-violet-700">
+            La devolución requiere aprobación del administrador: el stock disponible no cambia hasta
+            que la solicitud sea aprobada.
+          </p>
+        )}
 
         <button
           type="submit"
@@ -674,10 +657,14 @@ export default function MovementForm() {
           {photoState === "compressing"
             ? "Comprimiendo imagen…"
             : phase === "submitting"
-              ? submitStep === "uploading-photo"
-                ? "Subiendo fotografía…"
-                : "Registrando movimiento…"
-              : "Confirmar movimiento"}
+              ? movementType === "withdrawal"
+                ? submitStep === "uploading-photo"
+                  ? "Subiendo fotografía…"
+                  : "Registrando movimiento…"
+                : "Enviando solicitud…"
+              : movementType === "withdrawal"
+                ? "Confirmar movimiento"
+                : "Enviar solicitud de devolución"}
         </button>
       </form>
     </main>

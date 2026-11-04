@@ -74,6 +74,48 @@ export interface AllocationInput {
   quantity: number;
 }
 
+export type ReturnRequestStatus = "pending" | "approved" | "rejected";
+
+export interface ReturnRequest {
+  id: string;
+  technician_id: string;
+  material_id: string;
+  quantity: number;
+  notes: string | null;
+  status: ReturnRequestStatus;
+  allocations: { withdrawal_movement_id: string; quantity: number }[] | null;
+  requested_at: string;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  admin_notes: string | null;
+  movement_id: string | null;
+  idempotency_key: string | null;
+  technicians?: { full_name: string } | null;
+  materials?: { name: string; code: string; unit: string } | null;
+  profiles?: { email: string } | null;
+}
+
+/** Fila combinada de v_return_flow: movimientos de devolución (%) y solicitudes */
+export interface ReturnFlowRow {
+  id: string;
+  source: "movement" | "request";
+  technician_id: string;
+  technician_name: string;
+  material_id: string;
+  material_name: string;
+  material_code: string;
+  unit: string;
+  quantity: number;
+  notes: string | null;
+  requested_at: string;
+  status: ReturnRequestStatus;
+  resolved_by: string | null;
+  resolver_email: string | null;
+  resolved_at: string | null;
+  admin_notes: string | null;
+  photo_path: string | null;
+}
+
 declare global {
   interface ImportMetaEnv {
     readonly VITE_SUPABASE_URL: string;

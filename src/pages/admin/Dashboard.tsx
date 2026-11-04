@@ -12,6 +12,7 @@ interface Stats {
   lowStock: number;
   outOfStock: number;
   pendingCount: number;
+  pendingRequests: number;
 }
 
 export default function Dashboard() {
@@ -30,6 +31,7 @@ export default function Dashboard() {
           wdCountRes,
           rtCountRes,
           pendingRes,
+          pendingReqsRes,
           lastRes,
         ] = await Promise.all([
           supabase.from("v_material_stock").select("is_low_stock, is_out_of_stock, active"),
@@ -43,6 +45,10 @@ export default function Dashboard() {
             .select("id", { count: "exact", head: true })
             .eq("movement_type", "return"),
           supabase.from("v_pending_withdrawals").select("id, pending_qty"),
+          supabase
+            .from("return_requests")
+            .select("id", { count: "exact", head: true })
+            .eq("status", "pending"),
           supabase
             .from("movements")
             .select("id, technician_id, material_id, movement_type, quantity, created_at, notes")
@@ -60,6 +66,7 @@ export default function Dashboard() {
           lowStock: stock.filter((s) => s.active && s.is_low_stock === true && !(s.is_out_of_stock === true)).length,
           outOfStock: stock.filter((s) => s.active && s.is_out_of_stock === true).length,
           pendingCount: (pendingRes.data ?? []).reduce((sum, p) => sum + p.pending_qty, 0),
+          pendingRequests: pendingReqsRes.count ?? 0,
         };
         setStats(stats);
 
@@ -98,6 +105,11 @@ export default function Dashboard() {
       label: "Pendiente de devolución (unidades fuera)",
       value: stats ? formatQty(stats.pendingCount) : "…",
       accent: "text-violet-600",
+    },
+    {
+      label: "Devoluciones pendientes de aprobación",
+      value: stats ? formatQty(stats.pendingRequests) : "…",
+      accent: stats?.pendingRequests ? "text-amber-600" : "text-slate-900",
     },
   ];
 

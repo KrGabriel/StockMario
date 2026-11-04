@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { NavLink, Navigate, Outlet, useNavigate } from "react-router-dom";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "../../lib/supabase";
@@ -8,6 +8,7 @@ const NAV = [
   { to: "/admin/historial", label: "Historial" },
   { to: "/admin/resumenes", label: "Resumen de movimientos" },
   { to: "/admin/pendientes", label: "Pendientes" },
+  { to: "/admin/devoluciones", label: "Devoluciones pendientes" },
   { to: "/admin/materiales", label: "Materiales" },
   { to: "/admin/tecnicos", label: "Técnicos" },
 ];
@@ -16,6 +17,16 @@ export default function AdminLayout() {
   const navigate = useNavigate();
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [pendingReturns, setPendingReturns] = useState(0);
+
+  // Indicador visible de solicitudes de devolución pendientes
+  const fetchPendingReturns = useCallback(async () => {
+    const { count } = await supabase
+      .from("return_requests")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "pending");
+    setPendingReturns(count ?? 0);
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -29,6 +40,17 @@ export default function AdminLayout() {
     });
     return () => subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!session) return;
+    fetchPendingReturns();
+    const interval = window.setInterval(fetchPendingReturns, 45_000);
+    window.addEventListener("return-requests-updated", fetchPendingReturns);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("return-requests-updated", fetchPendingReturns);
+    };
+  }, [session, fetchPendingReturns]);
 
   async function signOut() {
     await supabase.auth.signOut();
@@ -77,6 +99,11 @@ export default function AdminLayout() {
                   }
                 >
                   {label}
+                  {to === "/admin/devoluciones" && pendingReturns > 0 && (
+                    <span className="ml-2 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[11px] font-bold text-white">
+                      {pendingReturns}
+                    </span>
+                  )}
                 </NavLink>
               </li>
             ))}

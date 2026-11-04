@@ -220,3 +220,42 @@ Cada **RETIRO** requiere una fotografía del material, herramienta o equipo. Las
 - Bloqueo por fila (`FOR UPDATE` sobre el material) para prevenir carreras de stock simultáneo.
 - Idempotencia por `idempotency_key` única: una doble pulsación no crea dos movimientos.
 - La clave `service_role` nunca se usa ni se expone en el frontend.
+
+---
+
+## 13. Cámara obligatoria y devoluciones con aprobación (v1.2)
+
+### Retiros: solo cámara en el momento
+
+- El input de archivos fue **eliminado**; no existe botón de galería ni `accept="image/*"`.
+- Nuevo componente `src/components/CameraCapture.tsx`: `navigator.mediaDevices.getUserMedia()` con `facingMode: environment` (cámara trasera), video `playsInline`, botón **Abrir cámara** → **Capturar foto** → vista previa → **Volver a tomar / Descartar**.
+- Mensajes claros para: permiso denegado, sin cámara, navegador incompatible y error interno.
+- Las pistas de video se detienen al capturar, desmontar el componente o cambiar de pantalla (cleanup de React).
+- Se mantiene la compresión previa (WebP 1ª opción, JPEG fallback; ≤ 1280 px; calidad ~0.75).
+
+### Devoluciones: flujo con aprobación administrativa
+
+**Formulario del técnico:** al elegir DEVOLUCIÓN ya no registra el movimiento: envía una **solicitud** (RPC `create_return_request`, que valida técnico/material activos, cantidad > 0 y asignaciones compatibles para reutilizables). Confirmación: *"Devolución enviada correctamente. Está pendiente de aprobación por el administrador."* El stock no cambia.
+
+**Modelo:** tabla `return_requests` (`status: pending/approved/rejected`, `requested_at`, `resolved_by → profiles`, `resolved_at`, `admin_notes`, `movement_id`, `allocations` jsonb, `idempotency_key`) con CHECK de invariantes de estado (pendiente sin resolver; aprobada con movimiento; rechazada con motivo). Las devoluciones efectivas siguen siendo filas de `movements` — los históricos y sumatorias **no cambian** y no cuentan solicitudes pendientes/rechazadas.
+
+**RPCs transaccionales:**
+- `create_return_request(...)` — alta de solicitud (rol anon, sin tocar stock).
+- `approve_return_request(p_request_id)` — solo `is_admin`; bloquea la fila de la solicitud (`FOR UPDATE`, un segundo intento falla con REQUEST_ALREADY_RESOLVED), bloquea la fila del material (protección contra dos aprobaciones simultáneas), **revalida** pendientes reales de cada retiro, crea el movimiento, genera/revalida las asociaciones de devoluciones parciales (FIFO o las solicitadas por el técnico) y registra resolved_by/resolved_at. Todo o nada.
+- `reject_return_request(p_request_id, p_admin_notes)` — marca rechazada con motivo; sin tocar stock ni historial.
+- `create_return` (devolución directa legacy) quedó **restringida a administradores** (se revocó al rol anon) y con bloqueo por filas base corregido (bug latente de `FOR UPDATE` sobre vista, aplicado también en la vía de aprobación).
+
+**Panel administrativo:**
+- Nueva sección **Devoluciones pendientes** (`/admin/devoluciones`): tabla con solicitada/técnico/material/cantidad/unidad/observaciones/estado y acciones **Aprobar / Rechazar** con confirmación (el rechazo exige motivo). Errores mostrados sin procesar nada parcialmente.
+- Indicador visible: badge con contador en la navegación + tarjeta en el Dashboard, refresco automático (45 s y al resolver una solicitud).
+- **Historial:** al filtrar por tipo *Devoluciones* la tabla cambia al flujo combinado (vista `v_return_flow`: devoluciones efectivas + solicitudes pendientes/rechazadas sin duplicar) con columnas de estado, resolvió (usuario y fecha) y motivo, además del filtro "Estado devolución" (Todas/Pendientes/Aprobadas/Rechazadas) y CSV propio.
+
+### SQL y despliegue
+
+1. Ejecutar en el SQL Editor **`supabase/migrations/0005_return_requests.sql`** (idempotente): tabla + índices + CHECKs, 3 RPCs nuevas, corrección de `create_return`, revocación de `create_return` al rol anon, vista `v_return_flow`, RLS de `return_requests` y el extra de lectura de `profiles` para administradores.
+2. Sin cambios de Storage ni de Edge Functions.
+3. Deploy: push a GitHub (Vercel redespliega automático; URL y QR intacta).
+
+### Pruebas obligatorias cubiertas (resumen)
+
+Retiro solo-cámara en Chrome/Opera/Opera con rechazo de permisos; solicitud de devolución → queda pendiente y el stock no varía; aprobar → stock y pendientes actualizados con auditoría; rechazar → sin cambios con motivo; doble aprobación y aprobación simultánea bloqueadas por `FOR UPDATE`; devolución parcial reutilizable con revalidación de asignaciones; históricos intactos.

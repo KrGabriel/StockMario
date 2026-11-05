@@ -36,12 +36,12 @@ export default function WithdrawalRequests() {
       const res = await supabase
         .from("withdrawal_requests")
         .select(
-          "*, technicians ( full_name ), materials ( name, code, unit ), profiles ( email )",
+          "id, technician_id, material_id, quantity, notes, photo_path, status, resolution_reason, corrected_material_id, corrected_quantity, admin_notes, requested_at, resolved_by, resolved_at, movement_id, idempotency_key, technicians ( full_name ), materials!withdrawal_requests_material_id_fkey ( name, code, unit ), corrected_material:withdrawal_requests_corrected_material_id_fkey ( name, code, unit ), profiles ( email )",
         )
         .eq("status", "pending")
         .order("requested_at", { ascending: true });
       if (res.error) throw res.error;
-      setRequests((res.data ?? []) as WithdrawalRequest[]);
+      setRequests((res.data ?? []) as unknown as WithdrawalRequest[]);
     } catch (e) {
       setError(errorMessage(e));
     } finally {

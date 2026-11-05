@@ -11,6 +11,7 @@ const NAV = [
   { to: "/admin/retiros", label: "Retiros pendientes" },
   { to: "/admin/devoluciones", label: "Devoluciones pendientes" },
   { to: "/admin/materiales", label: "Materiales" },
+  { to: "/admin/categorias", label: "Categorías" },
   { to: "/admin/tecnicos", label: "Técnicos" },
 ];
 

@@ -1,4 +1,5 @@
 import type { Movement, Material, Technician } from "./types";
+import { iclassOf } from "./types";
 import { formatDateTime } from "./format";
 
 function csvEscape(value: unknown): string {
@@ -47,9 +48,13 @@ export function historyToCsv({
     "Cantidad",
     "Unidad",
     "Observaciones",
+    "ICLASS",
+    "Confirmado por",
+    "Fecha confirmación ICLASS",
   ];
   const rows = movements.map((mv) => {
     const m = mat.get(mv.material_id);
+    const conf = iclassOf(mv.iclass_confirmations);
     return [
       formatDateTime(mv.created_at),
       tech.get(mv.technician_id) ?? "-",
@@ -59,6 +64,9 @@ export function historyToCsv({
       mv.quantity,
       m?.unit ?? "",
       mv.notes ?? "",
+      conf ? "Confirmado" : "Pendiente",
+      conf?.profiles?.email ?? "",
+      conf ? formatDateTime(conf.confirmed_at) : "",
     ];
   });
   return toCsv([header, ...rows]);

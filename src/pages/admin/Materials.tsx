@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
-import type { MaterialStock, MaterialType } from "../../lib/types";
+import type { Category, MaterialStock, MaterialType } from "../../lib/types";
 import { formatQty, errorMessage } from "../../lib/format";
 import { toCsv } from "../../lib/csv";
 
@@ -30,6 +31,7 @@ const EMPTY: EditState = {
 
 export default function Materials() {
   const [rows, setRows] = useState<MaterialStock[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [editing, setEditing] = useState<EditState | null>(null);
@@ -51,8 +53,19 @@ export default function Materials() {
     }
   }
 
+  async function loadCategories() {
+    try {
+      const res = await supabase.from("categories").select("id, name, created_at").order("name");
+      if (res.error) throw res.error;
+      setCategories((res.data ?? []) as Category[]);
+    } catch (e) {
+      setError(errorMessage(e));
+    }
+  }
+
   useEffect(() => {
     load();
+    loadCategories();
   }, []);
 
   const filtered = useMemo(() => {
@@ -76,11 +89,25 @@ export default function Materials() {
       minimum_stock: String(m.minimum_stock),
       active: m.active,
     });
+    // Refresca el catálogo por si hubo cambios desde la sección de categorías
+    loadCategories();
   }
 
   function openNew() {
     setEditing({ ...EMPTY });
+    loadCategories();
   }
+
+  // Lista desplegable: si el material editado tiene una categoría que ya no
+  // esté en el catálogo, se agrega a la lista para no perder el dato.
+  const categoryOptions = useMemo(() => {
+    const opts = [...categories];
+    const editingCat = editing?.category?.trim();
+    if (editingCat && !opts.some((c) => c.name === editingCat)) {
+      opts.push({ id: "editing-current", name: editingCat, created_at: "" });
+    }
+    return opts;
+  }, [categories, editing]);
 
   async function save() {
     if (!editing) return;
@@ -339,8 +366,23 @@ export default function Materials() {
                 <input className="input" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
               </div>
               <div className="col-span-2">
-                <label className="label">Categoría</label>
-                <input className="input" value={editing.category} onChange={(e) => setEditing({ ...editing, category: e.target.value })} />
+                <div className="flex items-baseline justify-between">
+                  <label className="label" htmlFor="mat-category">Categoría</label>
+                  <Link to="/admin/categorias" className="text-xs text-brand-600 underline">
+                    Gestionar categorías
+                  </Link>
+                </div>
+                <select
+                  id="mat-category"
+                  className="input"
+                  value={editing.category}
+                  onChange={(e) => setEditing({ ...editing, category: e.target.value })}
+                >
+                  <option value="">— Sin categoría —</option>
+                  {categoryOptions.map((c) => (
+                    <option key={c.id} value={c.name}>{c.name}</option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="label">Unidad</label>

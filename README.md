@@ -281,6 +281,34 @@ Cada **RETIRO** requiere una fotografía del material, herramienta o equipo. Las
 1. Ejecutar en el SQL Editor **`supabase/migrations/0007_withdrawal_requests.sql`** (idempotente): tabla, RPCs, vista `v_withdrawal_flow`, RLS y revocación de `create_withdrawal` al rol anon (todo retiro público pasa por aprobación).
 2. Deploy: push a GitHub (Vercel redespliega automático; URL y QR intacta).
 
+---
+
+## 15. Categorías gestionables, subida a ICLASS y fix de recarga (v1.4)
+
+### Fix: error 404 al recargar / (Vercel)
+
+Nuevo **`vercel.json`** con rewrite catch-all a `index.html` (el filesystem tiene prioridad, así que los assets y el HTML de Vite siguen sirviéndose con caché normal). Resultado: F5, navegación profunda o apertura directa de `/admin/historial`, `/admin/retiros`, etc. funcionan sin 404. Sin cambios en las rutas ni en la app.
+
+### GESTIÓN DE CATEGORÍAS
+
+- **Nueva tabla `categories`** (nombre único; RLS: lectura/alta/edición/baja solo admin), **sembrada automáticamente** con las categorías ya existentes en `materials` — no se pierde ningún dato y `materials.category` sigue siendo texto libre (compatibilidad total con historial, vistas e importaciones).
+- Nueva sección **Admin → Categorías** (`/admin/categorias`): crear, consultar (con contador de materiales asociados), renombrar y eliminar.
+  - **Renombrar** (RPC `rename_category`): actualiza la categoría **y propaga el nombre a los materiales** en la misma transacción.
+  - **Eliminar** (RPC `delete_category`): solo si la categoría no tiene materiales asociados; si hay, el error indica los material(es) a reasignar (no borra nada forzosamente).
+- ** Alta/edición de materiales**: el campo Categoría ahora es una **lista desplegable** con las categorías del catálogo (opción "— Sin categoría —"), refrescada al abrir el formulario, con acceso directo a la gestión.
+
+### Subida a ICLASS (confirmación administrativa)
+
+- **Nueva tabla `iclass_confirmations`** (movement_id único, confirmado por quién y cuándo; RLS solo lectura para admins, escritura solo vía RPC): registro interno de trazabilidad; **los movimientos nunca se borran ni se modifican**.
+- **Historial → vista de Movimientos**: filtro **"Subida a ICLASS"** con valor por defecto **Pendientes** (los confirmados dejan de aparecer, incluso tras recargar), opción Confirmados y Todos. Columna ICLASS con fecha y usuario de confirmación.
+- **Lista con checkboxes** (por fila y "seleccionar todo visible") y botón **CONFIRMAR SUBIDA A ICLASS (N)** con modal de confirmación. RPC `confirm_iclass_upload(p_movement_ids uuid[])`: solo admin, idempotente (los ya confirmados se saltan sin alterar su registro), en una única transacción.
+- Export CSV de movimientos incluye estado ICLASS + responsable + fecha.
+
+### SQL y despliegue (v1.4)
+
+1. Ejecutar en el SQL Editor **`supabase/migrations/0008_categories_iclass.sql`** (idempotente): tabla `categories` + siembra, RPCs `rename_category`/`delete_category`, tabla `iclass_confirmations`, RPC `confirm_iclass_upload` y RLS.
+2. Deploy: commit + push a GitHub (Vercel redespliega automático; `vercel.json` entra con el mismo deploy; URL y QR intactas).
+
 ### Pruebas obligatorias cubiertas (resumen)
 
 Retiro solo-cámara en Chrome/Opera/Opera con rechazo de permisos; solicitud de devolución → queda pendiente y el stock no varía; aprobar → stock y pendientes actualizados con auditoría; rechazar → sin cambios con motivo; doble aprobación y aprobación simultánea bloqueadas por `FOR UPDATE`; devolución parcial reutilizable con revalidación de asignaciones; históricos intactos.

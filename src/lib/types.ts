@@ -42,6 +42,23 @@ interface MaterialRowFields {
   initial_stock: number;
 }
 
+export interface IclassConfirmation {
+  confirmed_at: string;
+  confirmed_by: string | null;
+  profiles?: { email: string } | null;
+}
+
+export type IclassEmbed =
+  | IclassConfirmation
+  | IclassConfirmation[]
+  | null;
+
+/** El embed one-to-one puede llegar como objeto o como array según la versión de PostgREST */
+export function iclassOf(embed: IclassEmbed | undefined): IclassConfirmation | null {
+  if (!embed) return null;
+  return Array.isArray(embed) ? (embed[0] ?? null) : embed;
+}
+
 export interface Movement {
   id: string;
   technician_id: string;
@@ -53,6 +70,13 @@ export interface Movement {
   created_at: string;
   idempotency_key: string | null;
   photo_path: string | null;
+  iclass_confirmations?: IclassEmbed;
+}
+
+export interface Category {
+  id: string;
+  name: string;
+  created_at: string;
 }
 
 export interface PendingWithdrawal {

@@ -3,9 +3,12 @@ import { supabase } from "../../lib/supabase";
 import type { Movement, Technician, Material, ReturnFlowRow, WithdrawalFlowRow } from "../../lib/types";
 import { formatDateTime, formatQty, errorMessage } from "../../lib/format";
 import { historyToCsv, downloadCsv, toCsv } from "../../lib/csv";
+import { iclassOf } from "../../lib/types";
 import PhotoPreview from "./PhotoPreview";
 
 const PAGE_SIZE = 50;
+const MOVEMENT_SELECT =
+  "id, technician_id, material_id, movement_type, quantity, notes, created_by, created_at, idempotency_key, photo_path, iclass_confirmations ( confirmed_at, confirmed_by, profiles ( email ) )";
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "Pendiente",
@@ -99,6 +102,7 @@ export default function History() {
   const [matFilter, setMatFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [iclassFilter, setIclassFilter] = useState<"pending" | "confirmed" | "">("pending");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
@@ -109,6 +113,10 @@ export default function History() {
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmIclass, setConfirmIclass] = useState(false);
+  const [iclassBusy, setIclassBusy] = useState(false);
 
   const returnMode = typeFilter === "return";
   const withdrawalMode = typeFilter === "withdrawal";
@@ -171,22 +179,23 @@ export default function History() {
           setReturnFlow((data ?? []) as ReturnFlowRow[]);
           setCount(qCount ?? 0);
         } else {
-          // Historial de movimientos efectivos (retiros y aprobadas) — sin cambios
+          // Historial de movimientos efectivos (retiros y devoluciones efectivas),
+          // con el estado de subida a ICLASS (pendientes por defecto).
           let query = supabase
             .from("movements")
-            .select("id, technician_id, material_id, movement_type, quantity, notes, created_by, created_at, idempotency_key, photo_path", {
-              count: "exact",
-            })
+            .select(MOVEMENT_SELECT, { count: "exact" })
             .order("created_at", { ascending: false })
             .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
           if (techFilter) query = query.eq("technician_id", techFilter);
           if (matFilter) query = query.eq("material_id", matFilter);
           if (typeFilter) query = query.eq("movement_type", typeFilter);
+          if (iclassFilter === "pending") query = query.is("iclass_confirmations", null);
+          if (iclassFilter === "confirmed") query = query.not("iclass_confirmations", "is", null);
           if (dateFrom) query = query.gte("created_at", `${dateFrom}T00:00:00`);
           if (dateTo) query = query.lte("created_at", `${dateTo}T23:59:59`);
           const { data, error: qError, count: qCount } = await query;
           if (qError) throw qError;
-          setMovements((data ?? []) as Movement[]);
+          setMovements((data ?? []) as unknown as Movement[]);
           setCount(qCount ?? 0);
         }
       } catch (e) {
@@ -195,7 +204,7 @@ export default function History() {
         setLoading(false);
       }
     })();
-  }, [returnMode, withdrawalMode, techFilter, matFilter, typeFilter, statusFilter, dateFrom, dateTo, page]);
+  }, [returnMode, withdrawalMode, techFilter, matFilter, typeFilter, statusFilter, iclassFilter, dateFrom, dateTo, page]);
 
   function exportCsv() {
     if (withdrawalMode) {
@@ -218,9 +227,59 @@ export default function History() {
 
   const matMap = new Map(materials.map((m) => [m.id, m]));
   const pages = Math.max(1, Math.ceil(count / PAGE_SIZE));
+  const visibleIds = movements.map((m) => m.id);
+  const selectedCount = [...selected].filter((id) => visibleIds.includes(id)).length;
+
+  function toggleRow(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAllVisible() {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const allVisible = visibleIds.every((id) => next.has(id));
+      for (const id of visibleIds) {
+        if (allVisible) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+  }
+
+  async function confirmIclassUpload() {
+    setIclassBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const ids = [...selected].filter((id) => visibleIds.includes(id));
+      const { data, error: rpcError } = await supabase.rpc("confirm_iclass_upload", {
+        p_movement_ids: ids,
+      });
+      if (rpcError) throw rpcError;
+      setSelected(new Set());
+      setConfirmIclass(false);
+      setNotice(
+        `Subida a ICLASS confirmada por ${data ?? 0} movimiento(s). Ya no aparecen en la lista de pendientes.`,
+      );
+      setPage(0);
+    } catch (e) {
+      setConfirmIclass(false);
+      setError(errorMessage(e));
+    } finally {
+      setIclassBusy(false);
+    }
+  }
 
   return (
     <div className="space-y-4">
+      {notice && (
+        <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">{notice}</div>
+      )}
       <div className="card grid grid-cols-2 gap-3 md:grid-cols-5">
         <div>
           <label className="label">Técnico</label>
@@ -257,6 +316,16 @@ export default function History() {
               <option value="approved">Aprobados</option>
               <option value="rejected">Rechazados</option>
               {withdrawalMode && <option value="corrected">Corregidos</option>}
+            </select>
+          </div>
+        )}
+        {!returnMode && !withdrawalMode && (
+          <div>
+            <label className="label">Subida a ICLASS</label>
+            <select className="input !py-2" value={iclassFilter} onChange={(e) => { setIclassFilter(e.target.value as "pending" | "confirmed" | ""); setPage(0); }}>
+              <option value="pending">Pendientes</option>
+              <option value="confirmed">Confirmados</option>
+              <option value="">Todos</option>
             </select>
           </div>
         )}
@@ -460,29 +529,63 @@ export default function History() {
             </tbody>
           </table>
         ) : (
-          <table className="min-w-full divide-y divide-slate-200">
-            <thead>
-              <tr>
-                <th className="th">Fecha</th>
-                <th className="th">Hora</th>
-                <th className="th">Técnico</th>
-                <th className="th">Material</th>
-                <th className="th text-right">Cantidad</th>
-                <th className="th">Movimiento</th>
-                <th className="th">Foto</th>
-                <th className="th">Observaciones</th>
-              </tr>
-            </thead>
+          <>
+            <div className="mb-3 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3">
+              <button
+                onClick={() => setConfirmIclass(true)}
+                className="btn-primary !w-auto"
+                disabled={selectedCount === 0 || iclassBusy}
+              >
+                CONFIRMAR SUBIDA A ICLASS{selectedCount > 0 ? ` (${selectedCount})` : ""}
+              </button>
+              <span className="text-xs text-slate-500">
+                Marcá los movimientos verificándolos y confirmalos: se registran con tu usuario y
+                fecha, y dejan de aparecer como pendientes de carga.
+              </span>
+            </div>
+            <table className="min-w-full divide-y divide-slate-200">
+              <thead>
+                <tr>
+                  <th className="th text-center">
+                    <input
+                      type="checkbox"
+                      aria-label="Seleccionar todo lo visible"
+                      checked={visibleIds.length > 0 && visibleIds.every((id) => selected.has(id))}
+                      onChange={toggleAllVisible}
+                      className="h-4 w-4"
+                    />
+                  </th>
+                  <th className="th">Fecha</th>
+                  <th className="th">Hora</th>
+                  <th className="th">Técnico</th>
+                  <th className="th">Material</th>
+                  <th className="th text-right">Cantidad</th>
+                  <th className="th">Movimiento</th>
+                  <th className="th">Foto</th>
+                  <th className="th">Observaciones</th>
+                  <th className="th">ICLASS</th>
+                </tr>
+              </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td className="td" colSpan={8}>Cargando…</td></tr>
+                <tr><td className="td" colSpan={10}>Cargando…</td></tr>
               ) : movements.length === 0 ? (
-                <tr><td className="td" colSpan={8}>No hay movimientos con estos filtros.</td></tr>
+                <tr><td className="td" colSpan={10}>No hay movimientos con estos filtros.</td></tr>
               ) : (
                 movements.map((mv) => {
                   const m = matMap.get(mv.material_id);
+                  const confirmed = iclassOf(mv.iclass_confirmations);
                   return (
                     <tr key={mv.id}>
+                      <td className="td text-center">
+                        <input
+                          type="checkbox"
+                          aria-label={`Seleccionar movimiento del ${formatDateTime(mv.created_at)}`}
+                          checked={selected.has(mv.id)}
+                          onChange={() => toggleRow(mv.id)}
+                          className="h-4 w-4"
+                        />
+                      </td>
                       <td className="td whitespace-nowrap">{formatDateTime(mv.created_at).split(",")[0]}</td>
                       <td className="td whitespace-nowrap">{formatDateTime(mv.created_at).split(", ")[1] ?? ""}</td>
                       <td className="td">{technicians.find((t) => t.id === mv.technician_id)?.full_name ?? "-"}</td>
@@ -510,12 +613,22 @@ export default function History() {
                       <td className="td max-w-40 truncate" title={mv.notes ?? ""}>
                         {mv.notes ?? "-"}
                       </td>
+                      <td className="td whitespace-nowrap" title={confirmed ? `${confirmed.profiles?.email ?? "-"} · ${formatDateTime(confirmed.confirmed_at)}` : "Pendiente de subida a ICLASS"}>
+                        {confirmed ? (
+                          <span className="badge bg-green-100 text-green-700">
+                            ✓ {formatDateTime(confirmed.confirmed_at)}
+                          </span>
+                        ) : (
+                          <span className="badge bg-amber-100 text-amber-700">Pendiente</span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })
               )}
             </tbody>
           </table>
+          </>
         )}
 
         {pages > 1 && (
@@ -532,6 +645,27 @@ export default function History() {
           </div>
         )}
       </div>
+
+      {confirmIclass && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 md:items-center" onClick={() => setConfirmIclass(false)}>
+          <div className="card w-full max-w-md space-y-4 !p-5" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-bold">¿Confirmar subida a ICLASS?</h3>
+            <p className="text-sm text-slate-600">
+              Vas a confirmar que {selectedCount} movimiento(s) ya fueron cargados en ICLASS. Se
+              registrará tu usuario y la fecha/hora de la confirmación, y dejarán de aparecer en la
+              lista de pendientes. Los movimientos no se borran ni se modifican.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setConfirmIclass(false)} className="btn-secondary">
+                Cancelar
+              </button>
+              <button onClick={confirmIclassUpload} className="btn-primary !w-auto" disabled={iclassBusy}>
+                {iclassBusy ? "Procesando…" : "Confirmar subida a ICLASS"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {photoVer && (
         <PhotoPreview

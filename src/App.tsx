@@ -9,6 +9,7 @@ import Pending from "./pages/admin/Pending";
 import ReturnRequests from "./pages/admin/ReturnRequests";
 import WithdrawalRequests from "./pages/admin/WithdrawalRequests";
 import Materials from "./pages/admin/Materials";
+import Categories from "./pages/admin/Categories";
 import Technicians from "./pages/admin/Technicians";
 
 export default function App() {
@@ -24,6 +25,7 @@ export default function App() {
         <Route path="retiros" element={<WithdrawalRequests />} />
         <Route path="devoluciones" element={<ReturnRequests />} />
         <Route path="materiales" element={<Materials />} />
+        <Route path="categorias" element={<Categories />} />
         <Route path="tecnicos" element={<Technicians />} />
       </Route>
       <Route

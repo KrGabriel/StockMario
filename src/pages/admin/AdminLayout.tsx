@@ -8,6 +8,7 @@ const NAV = [
   { to: "/admin/historial", label: "Historial" },
   { to: "/admin/resumenes", label: "Resumen de movimientos" },
   { to: "/admin/pendientes", label: "Pendientes" },
+  { to: "/admin/retiros", label: "Retiros pendientes" },
   { to: "/admin/devoluciones", label: "Devoluciones pendientes" },
   { to: "/admin/materiales", label: "Materiales" },
   { to: "/admin/tecnicos", label: "Técnicos" },
@@ -18,6 +19,7 @@ export default function AdminLayout() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingReturns, setPendingReturns] = useState(0);
+  const [pendingWithdrawals, setPendingWithdrawals] = useState(0);
 
   // Indicador visible de solicitudes de devolución pendientes
   const fetchPendingReturns = useCallback(async () => {
@@ -26,6 +28,15 @@ export default function AdminLayout() {
       .select("id", { count: "exact", head: true })
       .eq("status", "pending");
     setPendingReturns(count ?? 0);
+  }, []);
+
+  // Indicador visible de solicitudes de retiro pendientes
+  const fetchPendingWithdrawals = useCallback(async () => {
+    const { count } = await supabase
+      .from("withdrawal_requests")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "pending");
+    setPendingWithdrawals(count ?? 0);
   }, []);
 
   useEffect(() => {
@@ -44,13 +55,18 @@ export default function AdminLayout() {
   useEffect(() => {
     if (!session) return;
     fetchPendingReturns();
+    fetchPendingWithdrawals();
     const interval = window.setInterval(fetchPendingReturns, 45_000);
+    const intervalW = window.setInterval(fetchPendingWithdrawals, 45_000);
     window.addEventListener("return-requests-updated", fetchPendingReturns);
+    window.addEventListener("withdrawal-requests-updated", fetchPendingWithdrawals);
     return () => {
       window.clearInterval(interval);
+      window.clearInterval(intervalW);
       window.removeEventListener("return-requests-updated", fetchPendingReturns);
+      window.removeEventListener("withdrawal-requests-updated", fetchPendingWithdrawals);
     };
-  }, [session, fetchPendingReturns]);
+  }, [session, fetchPendingReturns, fetchPendingWithdrawals]);
 
   async function signOut() {
     await supabase.auth.signOut();
@@ -102,6 +118,11 @@ export default function AdminLayout() {
                   {to === "/admin/devoluciones" && pendingReturns > 0 && (
                     <span className="ml-2 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[11px] font-bold text-white">
                       {pendingReturns}
+                    </span>
+                  )}
+                  {to === "/admin/retiros" && pendingWithdrawals > 0 && (
+                    <span className="ml-2 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[11px] font-bold text-white">
+                      {pendingWithdrawals}
                     </span>
                   )}
                 </NavLink>

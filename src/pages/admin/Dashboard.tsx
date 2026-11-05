@@ -13,6 +13,7 @@ interface Stats {
   outOfStock: number;
   pendingCount: number;
   pendingRequests: number;
+  pendingWithdrawals: number;
 }
 
 export default function Dashboard() {
@@ -32,6 +33,7 @@ export default function Dashboard() {
           rtCountRes,
           pendingRes,
           pendingReqsRes,
+          pendingWdRes,
           lastRes,
         ] = await Promise.all([
           supabase.from("v_material_stock").select("is_low_stock, is_out_of_stock, active"),
@@ -47,6 +49,10 @@ export default function Dashboard() {
           supabase.from("v_pending_withdrawals").select("id, pending_qty"),
           supabase
             .from("return_requests")
+            .select("id", { count: "exact", head: true })
+            .eq("status", "pending"),
+          supabase
+            .from("withdrawal_requests")
             .select("id", { count: "exact", head: true })
             .eq("status", "pending"),
           supabase
@@ -67,6 +73,7 @@ export default function Dashboard() {
           outOfStock: stock.filter((s) => s.active && s.is_out_of_stock === true).length,
           pendingCount: (pendingRes.data ?? []).reduce((sum, p) => sum + p.pending_qty, 0),
           pendingRequests: pendingReqsRes.count ?? 0,
+          pendingWithdrawals: pendingWdRes.count ?? 0,
         };
         setStats(stats);
 
@@ -110,6 +117,11 @@ export default function Dashboard() {
       label: "Devoluciones pendientes de aprobación",
       value: stats ? formatQty(stats.pendingRequests) : "…",
       accent: stats?.pendingRequests ? "text-amber-600" : "text-slate-900",
+    },
+    {
+      label: "Retiros pendientes de aprobación",
+      value: stats ? formatQty(stats.pendingWithdrawals) : "…",
+      accent: stats?.pendingWithdrawals ? "text-amber-600" : "text-slate-900",
     },
   ];
 

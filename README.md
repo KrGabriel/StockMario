@@ -253,8 +253,33 @@ Cada **RETIRO** requiere una fotografía del material, herramienta o equipo. Las
 ### SQL y despliegue
 
 1. Ejecutar en el SQL Editor **`supabase/migrations/0005_return_requests.sql`** (idempotente): tabla + índices + CHECKs, 3 RPCs nuevas, corrección de `create_return`, revocación de `create_return` al rol anon, vista `v_return_flow`, RLS de `return_requests` y el extra de lectura de `profiles` para administradores.
-2. Sin cambios de Storage ni de Edge Functions.
-3. Deploy: push a GitHub (Vercel redespliega automático; URL y QR intacta).
+2. Ejecutar en el SQL Editor **`supabase/migrations/0006_hotfix_storage_type_and_approve.sql`** (idempotente): corrige `create_withdrawal` (la foto se valida por `metadata->>'mimetype'` porque la columna `content_type` ya no existe en `storage.objects`) y corrige `approve_return_request` (un `SELECT` de técnicos sin `INTO` abortaba toda aprobación).
+3. Sin cambios de Storage ni de Edge Functions.
+4. Deploy: push a GitHub (Vercel redespliega automático; URL y QR intacta).
+
+---
+
+## 14. Retiros con aprobación administrativa (v1.3)
+
+**Formulario del técnico:** al registrar un RETIRO ya no se descuenta stock: la foto se sube y se crea una **solicitud** (`create_withdrawal_request`, misma validación de fotografía obligatoria). Confirmación: *"Retiro registrado correctamente. Está pendiente de aprobación por el administrador."* La solicitud no se puede modificar luego de enviarse.
+
+**Modelo:** tabla `withdrawal_requests` (`status: pending/approved/rejected/corrected`, `requested_at`, `resolved_by → profiles`, `resolved_at`, `admin_notes`, `photo_path` obligatoria, `movement_id` del movimiento efectivo, `corrected_material_id`/`corrected_quantity` reales, `resolution_reason: nothing_withdrawn | different_material_withdrawn`, `idempotency_key`) con CHECK de invariantes de estado.
+
+**Tres caminos del administrador** (`/admin/retiros`, con listado de fecha/técnico/material/cantidad/unidad/foto/observaciones y foto ampliada junto a los datos declarados):
+1. **Aprobar retiro** (`approve_withdrawal_request`): confirma el movimiento tal como lo declaró el técnico y descuenta stock.
+2. **Rechazar: no se retiró nada** (`reject_withdrawal_request`): motivo `nothing_withdrawn`, con observación administrativa opcional; el stock no cambia y la solicitud queda en historial.
+3. **Rechazar: se retiró otro material** (`correct_withdrawal_request`): selector de material real del catálogo (unidad automática) + cantidad real validada + observaciones. Se crea un movimiento efectivo independiente con la cantidad REAL del material REAL (solo eso se descuenta), queda vinculado a la solicitud original (`movement_id`) y los datos originales del técnico **no se sobrescriben** (`.status = 'corrected'`, motivo `different_material_withdrawn`).
+
+**RPCs transaccionales** (security definer, `FOR UPDATE` sobre la solicitud y sobre la fila del material → doble aprobación y aprobaciones simultáneas quedan bloqueadas; error con rollback completo). La validación de stock ocurre **en la transacción** de la aprobación/corrección: si no alcanza el stock, no se procesa nada (`STOCK_INSUFFICIENT`). Los JSON de error marcan `REQUEST_ALREADY_RESOLVED` si la solicitud ya fue resuelta.
+
+**Historial administrativo:** filtro por tipo *Retiros* consulta la vista `v_withdrawal_flow` con filtro de estado (Todas/Pendientes/Aprobadas/Rechazadas/Corregidas): muestra datos originales declarados + resolución (material real, cantidad real, resolvió, fecha, motivo) sin duplicar retiros corregidos, y exporta CSV propio. Las solicitudes pendientes/rechazadas no cuentan en inventario ni sumatorias; los corregidos contabilizan solo el movimiento efectivo. Filtros anteriores y devoluciones (v1.2) intactos.
+
+**Compatibilidad retiros ↔ devoluciones:** el movimiento creado al aprobar/corregir es un retiro normal de `movements`, por lo que `v_pending_withdrawals` y la vinculación de devoluciones parciales reutilizables funcionan igual que siempre.
+
+### SQL y despliegue (v1.3)
+
+1. Ejecutar en el SQL Editor **`supabase/migrations/0007_withdrawal_requests.sql`** (idempotente): tabla, RPCs, vista `v_withdrawal_flow`, RLS y revocación de `create_withdrawal` al rol anon (todo retiro público pasa por aprobación).
+2. Deploy: push a GitHub (Vercel redespliega automático; URL y QR intacta).
 
 ### Pruebas obligatorias cubiertas (resumen)
 

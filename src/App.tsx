@@ -7,6 +7,7 @@ import History from "./pages/admin/History";
 import Summaries from "./pages/admin/Summaries";
 import Pending from "./pages/admin/Pending";
 import ReturnRequests from "./pages/admin/ReturnRequests";
+import WithdrawalRequests from "./pages/admin/WithdrawalRequests";
 import Materials from "./pages/admin/Materials";
 import Technicians from "./pages/admin/Technicians";
 
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="historial" element={<History />} />
         <Route path="resumenes" element={<Summaries />} />
         <Route path="pendientes" element={<Pending />} />
+        <Route path="retiros" element={<WithdrawalRequests />} />
         <Route path="devoluciones" element={<ReturnRequests />} />
         <Route path="materiales" element={<Materials />} />
         <Route path="tecnicos" element={<Technicians />} />

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
-import type { Movement, Technician, Material, ReturnFlowRow } from "../../lib/types";
+import type { Movement, Technician, Material, ReturnFlowRow, WithdrawalFlowRow } from "../../lib/types";
 import { formatDateTime, formatQty, errorMessage } from "../../lib/format";
 import { historyToCsv, downloadCsv, toCsv } from "../../lib/csv";
 import PhotoPreview from "./PhotoPreview";
@@ -11,7 +11,54 @@ const STATUS_LABEL: Record<string, string> = {
   pending: "Pendiente",
   approved: "Aprobada",
   rejected: "Rechazada",
+  corrected: "Corregida",
 };
+
+const WITHDRAWAL_STATUS_LABEL: Record<string, string> = {
+  pending: "Pendiente",
+  approved: "Aprobado",
+  rejected: "Rechazado",
+  corrected: "Corregido",
+};
+
+const WITHDRAWAL_REASON_LABEL: Record<string, string> = {
+  nothing_withdrawn: "No se retiró nada",
+  different_material_withdrawn: "Se retiró otro material",
+};
+
+function withdrawalsToCsv(rows: WithdrawalFlowRow[]): string {
+  const header = [
+    "Fecha solicitud",
+    "Técnico",
+    "Material declarado",
+    "Cantidad declarada",
+    "Unidad",
+    "Estado",
+    "Material real",
+    "Cantidad real",
+    "Observaciones técnico",
+    "Resuelto por",
+    "Fecha resolución",
+    "Motivo / nota del administrador",
+  ];
+  const body = rows.map((r) => [
+    formatDateTime(r.requested_at),
+    r.technician_name,
+    r.declared_material_name,
+    r.declared_quantity,
+    r.declared_unit,
+    WITHDRAWAL_STATUS_LABEL[r.status] ?? r.status,
+    r.corrected_material_name ?? "",
+    r.corrected_quantity ?? "",
+    r.notes ?? "",
+    r.resolver_email ?? "",
+    r.resolved_at ? formatDateTime(r.resolved_at) : "",
+    [WITHDRAWAL_REASON_LABEL[r.resolution_reason ?? ""], r.admin_notes]
+      .filter((x) => x)
+      .join(" — "),
+  ]);
+  return toCsv([header, ...body]);
+}
 
 function returnsToCsv(rows: ReturnFlowRow[]): string {
   const header = [
@@ -57,12 +104,14 @@ export default function History() {
 
   const [movements, setMovements] = useState<Movement[]>([]);
   const [returnFlow, setReturnFlow] = useState<ReturnFlowRow[]>([]);
+  const [withdrawalFlow, setWithdrawalFlow] = useState<WithdrawalFlowRow[]>([]);
   const [count, setCount] = useState(0);
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   const returnMode = typeFilter === "return";
+  const withdrawalMode = typeFilter === "withdrawal";
 
   useEffect(() => {
     (async () => {
@@ -82,7 +131,27 @@ export default function History() {
       setLoading(true);
       setError("");
       try {
-        if (returnMode) {
+        if (withdrawalMode) {
+          // Historial de retiros: solicitudes (todas sus resoluciones) +
+          // retiros efectivos históricos sin duplicar los derivados de solicitudes
+          let q = supabase
+            .from("v_withdrawal_flow")
+            .select(
+              "id, source, technician_id, technician_name, declared_material_id, declared_material_name, declared_material_code, declared_unit, declared_quantity, photo_path, status, resolution_reason, corrected_material_id, corrected_material_name, corrected_material_code, corrected_unit, corrected_quantity, notes, resolved_by, resolver_email, resolved_at, admin_notes, requested_at, movement_id",
+              { count: "exact" },
+            )
+            .order("requested_at", { ascending: false })
+            .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+          if (techFilter) q = q.eq("technician_id", techFilter);
+          if (matFilter) q = q.eq("declared_material_id", matFilter);
+          if (statusFilter) q = q.eq("status", statusFilter);
+          if (dateFrom) q = q.gte("requested_at", `${dateFrom}T00:00:00`);
+          if (dateTo) q = q.lte("requested_at", `${dateTo}T23:59:59`);
+          const { data, error: qError, count: qCount } = await q;
+          if (qError) throw qError;
+          setWithdrawalFlow((data ?? []) as WithdrawalFlowRow[]);
+          setCount(qCount ?? 0);
+        } else if (returnMode) {
           // Historial de devoluciones: solicitudes (pendientes/rechazadas) y
           // devoluciones efectivas (aprobadas), sin duplicar las resueltas.
           let q = supabase
@@ -126,10 +195,15 @@ export default function History() {
         setLoading(false);
       }
     })();
-  }, [returnMode, techFilter, matFilter, typeFilter, statusFilter, dateFrom, dateTo, page]);
+  }, [returnMode, withdrawalMode, techFilter, matFilter, typeFilter, statusFilter, dateFrom, dateTo, page]);
 
   function exportCsv() {
-    if (returnMode) {
+    if (withdrawalMode) {
+      downloadCsv(
+        `historial-retiros-${new Date().toISOString().slice(0, 10)}.csv`,
+        withdrawalsToCsv(withdrawalFlow),
+      );
+    } else if (returnMode) {
       downloadCsv(
         `historial-devoluciones-${new Date().toISOString().slice(0, 10)}.csv`,
         returnsToCsv(returnFlow),
@@ -168,20 +242,21 @@ export default function History() {
         </div>
         <div>
           <label className="label">Tipo</label>
-          <select className="input !py-2" value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); setPage(0); }}>
+          <select className="input !py-2" value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); setStatusFilter(""); setPage(0); }}>
             <option value="">Todos</option>
             <option value="withdrawal">Retiros</option>
             <option value="return">Devoluciones</option>
           </select>
         </div>
-        {returnMode && (
+        {(returnMode || withdrawalMode) && (
           <div>
-            <label className="label">Estado devolución</label>
+            <label className="label">{returnMode ? "Estado devolución" : "Estado retiro"}</label>
             <select className="input !py-2" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}>
-              <option value="">Todas</option>
+              <option value="">Todos</option>
               <option value="pending">Pendientes</option>
-              <option value="approved">Aprobadas</option>
-              <option value="rejected">Rechazadas</option>
+              <option value="approved">Aprobados</option>
+              <option value="rejected">Rechazados</option>
+              {withdrawalMode && <option value="corrected">Corregidos</option>}
             </select>
           </div>
         )}
@@ -198,15 +273,133 @@ export default function History() {
       <div className="card overflow-x-auto">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="font-semibold text-slate-900">
-            {returnMode ? "Devoluciones y solicitudes" : "Movimientos"} ({count})
+            {withdrawalMode ? "Retiros y solicitudes" : returnMode ? "Devoluciones y solicitudes" : "Movimientos"} ({count})
           </h2>
-          <button onClick={exportCsv} className="btn-secondary" disabled={(!returnMode && movements.length === 0) || (returnMode && returnFlow.length === 0)}>
+          <button
+            onClick={exportCsv}
+            className="btn-secondary"
+            disabled={
+              (withdrawalMode && withdrawalFlow.length === 0) ||
+              (!returnMode && !withdrawalMode && movements.length === 0) ||
+              (returnMode && returnFlow.length === 0)
+            }
+          >
             Exportar CSV
           </button>
         </div>
         {error && <p className="text-sm text-red-600">{error}</p>}
 
-        {returnMode ? (
+        {withdrawalMode ? (
+          <table className="min-w-full divide-y divide-slate-200">
+            <thead>
+              <tr>
+                <th className="th">Solicitado</th>
+                <th className="th">Técnico</th>
+                <th className="th">Material declarado</th>
+                <th className="th text-right">Cantidad declarada</th>
+                <th className="th text-center">Estado</th>
+                <th className="th">Material real</th>
+                <th className="th text-right">Cantidad real</th>
+                <th className="th">Foto</th>
+                <th className="th">Observaciones</th>
+                <th className="th">Resolución</th>
+                <th className="th">Motivo / nota admin</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {loading ? (
+                <tr><td className="td" colSpan={11}>Cargando…</td></tr>
+              ) : withdrawalFlow.length === 0 ? (
+                <tr><td className="td" colSpan={11}>No hay retiros con estos filtros.</td></tr>
+              ) : (
+                withdrawalFlow.map((r) => (
+                  <tr key={`${r.source}-${r.id}`} className={r.status === "pending" ? "bg-amber-50/50" : ""}>
+                    <td className="td whitespace-nowrap">{formatDateTime(r.requested_at)}</td>
+                    <td className="td">{r.technician_name}</td>
+                    <td className="td">
+                      {r.declared_material_name}
+                      <span className="text-xs text-slate-400"> {r.declared_material_code}</span>
+                    </td>
+                    <td className="td text-right font-medium">
+                      {formatQty(r.declared_quantity)} {r.declared_unit}
+                    </td>
+                    <td className="td text-center">
+                      <span
+                        className={`badge ${
+                          r.status === "pending"
+                            ? "bg-amber-100 text-amber-700"
+                            : r.status === "approved"
+                              ? "bg-green-100 text-green-700"
+                              : r.status === "corrected"
+                                ? "bg-sky-100 text-sky-700"
+                                : "bg-red-100 text-red-700"
+                        }`}
+                      >
+                        {WITHDRAWAL_STATUS_LABEL[r.status] ?? r.status}
+                      </span>
+                    </td>
+                    <td className="td">
+                      {r.corrected_material_name
+                        ? `${r.corrected_material_name}${r.corrected_material_code ? ` ${r.corrected_material_code}` : ""}`
+                        : r.status === "rejected"
+                          ? "—"
+                          : "-"}
+                    </td>
+                    <td className="td text-right">
+                      {r.corrected_quantity
+                        ? `${formatQty(r.corrected_quantity)} ${r.corrected_unit ?? ""}`
+                        : "-"}
+                    </td>
+                    <td className="td">
+                      {r.photo_path ? (
+                        <button
+                          onClick={() =>
+                            setPhotoVer({
+                              movement: {
+                                id: r.movement_id ?? r.id,
+                                technician_id: r.technician_id,
+                                material_id: r.declared_material_id,
+                                movement_type: "withdrawal",
+                                quantity: r.declared_quantity,
+                                notes: r.notes,
+                                created_by: r.resolved_by,
+                                created_at: r.requested_at,
+                                idempotency_key: null,
+                                photo_path: r.photo_path,
+                              },
+                            })
+                          }
+                          className="text-violet-600 underline hover:text-violet-800"
+                          title={r.photo_path}
+                        >
+                          📷 Ver
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-300">—</span>
+                      )}
+                    </td>
+                    <td className="td max-w-36 truncate" title={r.notes ?? ""}>
+                      {r.notes ?? "-"}
+                    </td>
+                    <td className="td max-w-36 truncate" title={r.resolved_at ? `${r.resolver_email ?? "-"} · ${formatDateTime(r.resolved_at)}` : ""}>
+                      {r.resolved_at
+                        ? `${r.resolver_email ?? "-"} · ${formatDateTime(r.resolved_at)}`
+                        : "-"}
+                    </td>
+                    <td className="td max-w-36 truncate" title={r.admin_notes ?? ""}>
+                      {[
+                        WITHDRAWAL_REASON_LABEL[r.resolution_reason ?? ""] ?? "",
+                        r.admin_notes,
+                      ]
+                        .filter((x) => x)
+                        .join(" — ") || "-"}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        ) : returnMode ? (
           <table className="min-w-full divide-y divide-slate-200">
             <thead>
               <tr>
@@ -341,7 +534,13 @@ export default function History() {
       </div>
 
       {photoVer && (
-        <PhotoPreview movement={photoVer.movement} techName={technicians.find((t) => t.id === photoVer.movement.technician_id)?.full_name ?? "-"} matName={matMap.get(photoVer.movement.material_id)?.name ?? "-"} onClose={() => setPhotoVer(null)} />
+        <PhotoPreview
+          photoPath={photoVer.movement.photo_path!}
+          createdAt={photoVer.movement.created_at}
+          title={`Foto del retiro · ${technicians.find((t) => t.id === photoVer.movement.technician_id)?.full_name ?? "-"}`}
+          subtitle={matMap.get(photoVer.movement.material_id)?.name ?? "-"}
+          onClose={() => setPhotoVer(null)}
+        />
       )}
     </div>
   );

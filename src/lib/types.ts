@@ -76,6 +76,62 @@ export interface AllocationInput {
 
 export type ReturnRequestStatus = "pending" | "approved" | "rejected";
 
+export type WithdrawalRequestStatus = "pending" | "approved" | "rejected" | "corrected";
+export type WithdrawalResolutionReason =
+  | "nothing_withdrawn"
+  | "different_material_withdrawn";
+
+export interface WithdrawalRequest {
+  id: string;
+  technician_id: string;
+  material_id: string;
+  quantity: number;
+  notes: string | null;
+  photo_path: string;
+  status: WithdrawalRequestStatus;
+  resolution_reason: WithdrawalResolutionReason | null;
+  corrected_material_id: string | null;
+  corrected_quantity: number | null;
+  admin_notes: string | null;
+  requested_at: string;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  movement_id: string | null;
+  idempotency_key: string | null;
+  technicians?: { full_name: string } | null;
+  materials?: { name: string; code: string; unit: string } | null;
+  corrected_material?: { name: string; code: string; unit: string } | null;
+  profiles?: { email: string } | null;
+}
+
+/** Fila combinada de v_withdrawal_flow: solicitudes de retiro + retiros efectivos históricos */
+export interface WithdrawalFlowRow {
+  id: string;
+  source: "movement" | "request";
+  technician_id: string;
+  technician_name: string;
+  declared_material_id: string;
+  declared_material_name: string;
+  declared_material_code: string;
+  declared_unit: string;
+  declared_quantity: number;
+  photo_path: string | null;
+  status: WithdrawalRequestStatus | "approved";
+  resolution_reason: WithdrawalResolutionReason | null;
+  corrected_material_id: string | null;
+  corrected_material_name: string | null;
+  corrected_material_code: string | null;
+  corrected_unit: string | null;
+  corrected_quantity: number | null;
+  notes: string | null;
+  resolved_by: string | null;
+  resolver_email: string | null;
+  resolved_at: string | null;
+  admin_notes: string | null;
+  requested_at: string;
+  movement_id: string | null;
+}
+
 export interface ReturnRequest {
   id: string;
   technician_id: string;

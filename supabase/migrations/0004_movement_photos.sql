@@ -116,7 +116,7 @@ begin
     select 1 from storage.objects
     where bucket_id = 'movement-photos'
       and name = p_photo_path
-      and (content_type like 'image/%' or content_type like 'application/%image%' or content_type = '')
+      and coalesce(metadata->>'mimetype', '') like 'image/%'
   ) then
     raise exception 'La fotografía no se subió correctamente. Retiro no registrado: volvé a intentarlo.'
       using errcode = 'PHOTO_MISSING';

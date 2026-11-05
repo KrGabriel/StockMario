@@ -243,7 +243,7 @@ export default function MovementForm() {
 
     try {
       const isWithdrawal = movementType === "withdrawal";
-      const rpcName = isWithdrawal ? "create_withdrawal" : "create_return_request";
+      const rpcName = isWithdrawal ? "create_withdrawal_request" : "create_return_request";
       const args: Record<string, unknown> = {
         p_technician_id: technicianId,
         p_material_id: selectedMaterial!.id,
@@ -262,7 +262,7 @@ export default function MovementForm() {
 
       if (isWithdrawal && photo) {
         // 1. Subir la fotografía comprimida a Storage; su existencia
-        //    se valida dentro de la transacción del retiro.
+        //    se valida dentro de la transacción de la solicitud.
         const { year, month } = yearMonthInTz();
         const photoId = randomIdempotencyKey();
         const path = `${year}/${month}/${photoId}.${photo.ext}`;
@@ -274,7 +274,7 @@ export default function MovementForm() {
         uploadedPath = path;
         args.p_photo_path = path;
 
-        // 2. Registrar el movimiento con la ruta de la foto
+        // 2. Registrar la solicitud de retiro con la ruta de la foto
         setSubmitStep("registering");
         const { error: rpcError } = await supabase.rpc(rpcName, args);
         if (rpcError) throw rpcError;
@@ -288,7 +288,7 @@ export default function MovementForm() {
 
       setSuccessMsg(
         isWithdrawal
-          ? `Retiro registrado: ${formatQty(qtyNum)} ${selectedMaterial!.unit} de ${selectedMaterial!.name}`
+          ? `Retiro registrado correctamente. Está pendiente de aprobación por el administrador.`
           : `Devolución enviada correctamente. Está pendiente de aprobación por el administrador.`,
       );
       setPhase("success");
@@ -323,14 +323,12 @@ export default function MovementForm() {
             </svg>
           </div>
           <h1 className="text-xl font-bold text-slate-900">
-            {movementType === "withdrawal" ? "Movimiento registrado" : "Solicitud de devolución enviada"}
+            {movementType === "withdrawal" ? "Solicitud de retiro enviada" : "Solicitud de devolución enviada"}
           </h1>
           <p className="mt-2 text-slate-600">{successMsg}</p>
-          {movementType !== "withdrawal" && (
-            <p className="mt-1 text-sm text-slate-500">
-              El stock se actualizará cuando el administrador la apruebe.
-            </p>
-          )}
+          <p className="mt-1 text-sm text-slate-500">
+            El stock no cambia hasta que el administrador la apruebe.
+          </p>
           <button onClick={() => resetForm(false)} className="btn-primary mt-6">
             Registrar otro movimiento
           </button>
@@ -638,6 +636,13 @@ export default function MovementForm() {
           </p>
         )}
 
+        {movementType === "withdrawal" && !validationError && (
+          <p className="rounded-xl border border-brand-200 bg-brand-50 px-3 py-2.5 text-sm text-brand-700">
+            El retiro requiere aprobación del administrador: el stock no se descuenta hasta que la
+            solicitud sea aprobada.
+          </p>
+        )}
+
         {movementType === "return" && !validationError && (
           <p className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm text-violet-700">
             La devolución requiere aprobación del administrador: el stock disponible no cambia hasta
@@ -657,13 +662,11 @@ export default function MovementForm() {
           {photoState === "compressing"
             ? "Comprimiendo imagen…"
             : phase === "submitting"
-              ? movementType === "withdrawal"
-                ? submitStep === "uploading-photo"
-                  ? "Subiendo fotografía…"
-                  : "Registrando movimiento…"
+              ? submitStep === "uploading-photo"
+                ? "Subiendo fotografía…"
                 : "Enviando solicitud…"
               : movementType === "withdrawal"
-                ? "Confirmar movimiento"
+                ? "Enviar solicitud de retiro"
                 : "Enviar solicitud de devolución"}
         </button>
       </form>

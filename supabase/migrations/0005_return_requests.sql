@@ -171,6 +171,7 @@ declare
   v_req            public.return_requests%rowtype;
   v_material_type  text;
   v_material_name  text;
+  v_tech_name      text;
   v_movement_id    uuid;
   v_alloc_row      record;
   v_alloc_qty      numeric;
@@ -196,7 +197,7 @@ begin
   end if;
 
   -- Revalidar sobre la geometría actual del inventario
-  select full_name from public.technicians
+  select full_name into v_tech_name from public.technicians
     where id = v_req.technician_id and active = true;
   if not found then
     raise exception 'El técnico ya no está activo: no se puede aprobar';

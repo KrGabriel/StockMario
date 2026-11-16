@@ -317,8 +317,9 @@ export default function WithdrawalRequests() {
                   </p>
                   <p className="mt-2 text-xs text-slate-500">
                     Verificá que la fotografía coincida antes de confirmar. Se registrará el
-                    movimiento, se descontará el stock y quedará registrado con tu usuario y la fecha
-                    actual.
+                    movimiento conservando la fecha y hora original del retiro (
+                    {formatDateTime(confirm.req.requested_at)}); tu usuario y la fecha de aprobación
+                    quedan registrados por separado.
                   </p>
                 </div>
                 <div className="flex justify-end gap-2">
